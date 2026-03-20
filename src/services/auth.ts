@@ -10,11 +10,11 @@ export async function resolveToken(
   const config = vscode.workspace.getConfiguration("cursorMeter");
   const legacyConfig = vscode.workspace.getConfiguration("cursorUsage");
 
-  const manual =
-    config.get<string>("sessionToken")?.trim() ??
-    legacyConfig.get<string>("sessionToken")?.trim();
+  const manualCurrent = config.get<string>("sessionToken")?.trim();
+  const manualLegacy = legacyConfig.get<string>("sessionToken")?.trim();
+  const manual = manualCurrent || manualLegacy;
   if (manual) {
-    const usingLegacyManual = !config.get<string>("sessionToken")?.trim();
+    const usingLegacyManual = !manualCurrent && !!manualLegacy;
     if (usingLegacyManual) {
       log.appendLine("[auth] Using legacy cursorUsage.sessionToken");
     } else {
@@ -23,10 +23,14 @@ export async function resolveToken(
     return manual;
   }
 
-  const autoRead = config.get<boolean>(
-    "autoReadToken",
-    legacyConfig.get<boolean>("autoReadToken", true),
-  );
+  const currentAutoRead = config.inspect<boolean>("autoReadToken");
+  const legacyAutoRead = legacyConfig.inspect<boolean>("autoReadToken");
+  const autoRead =
+    currentAutoRead?.workspaceValue ??
+    currentAutoRead?.globalValue ??
+    legacyAutoRead?.workspaceValue ??
+    legacyAutoRead?.globalValue ??
+    true;
   if (!autoRead) {
     log.appendLine("[auth] Auto-read disabled and no manual token");
     return undefined;

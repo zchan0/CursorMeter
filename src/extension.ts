@@ -191,10 +191,14 @@ function buildTooltip(
 function getIntervalMs(): number {
   const meterConfig = vscode.workspace.getConfiguration("cursorMeter");
   const legacyConfig = vscode.workspace.getConfiguration("cursorUsage");
-  const minutes = meterConfig.get<number>(
-    "refreshIntervalMinutes",
-    legacyConfig.get<number>("refreshIntervalMinutes", 5),
-  );
+  const current = meterConfig.inspect<number>("refreshIntervalMinutes");
+  const legacy = legacyConfig.inspect<number>("refreshIntervalMinutes");
+  const minutes =
+    current?.workspaceValue ??
+    current?.globalValue ??
+    legacy?.workspaceValue ??
+    legacy?.globalValue ??
+    5;
   return Math.max(1, minutes) * 60_000;
 }
 
@@ -263,9 +267,9 @@ function timeAgo(ts: number): string {
 
 function formatBucket(bucket: UsageBucket): string {
   if (bucket.totalCents !== undefined) {
-    return `${formatMoney(bucket.usedCents)} / ${formatMoney(bucket.totalCents)}`;
+    return `${formatMoney(bucket.usedCents)} / ${formatMoney(bucket.totalCents)} (${bucket.source})`;
   }
-  return formatMoney(bucket.usedCents);
+  return `${formatMoney(bucket.usedCents)} (${bucket.source})`;
 }
 
 function formatMoney(cents: number): string {

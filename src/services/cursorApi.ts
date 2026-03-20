@@ -47,7 +47,18 @@ export async function fetchUsage(
   const teamSpendRaw = await fetchTeamSpend(encodedToken, stripeRaw, log);
   const myMember = findCurrentUserMember(teamSpendRaw, numericUserId, log);
 
-  log.appendLine(`[api] plan=${plan}, hasTeamData=${myMember !== undefined}`);
+  log.appendLine(
+    `[api] plan=${plan}, events=${events.length}, hasTeamData=${myMember !== undefined}`,
+  );
+  if (myMember) {
+    log.appendLine(
+      `[api] myMember keys: ${Object.keys(myMember).join(", ") || "(none)"}`,
+    );
+    log.appendLine(`[api] myMember raw: ${previewJson(redactForLog(myMember), 3000)}`);
+  }
+  log.appendLine(
+    `[api] teamSpend summary: ${previewJson(redactForLog(pickSummaryFields(teamSpendRaw)), 2000)}`,
+  );
 
   const data = buildUsageData(plan, myMember, teamSpendRaw, usageRaw, events, billingStart, log);
   return data;
@@ -104,6 +115,13 @@ function findCurrentUserMember(
     }
   }
 
+  // If team has only one member in current page, use it as a safe fallback.
+  // This avoids falling back to charged-event sums when userId cannot be inferred.
+  if (members.length === 1 && isRecord(members[0])) {
+    log.appendLine("[api] Using single team member as fallback");
+    return members[0];
+  }
+
   log.appendLine(
     `[api] Could not match current user in ${members.length} team members`,
   );
@@ -123,8 +141,16 @@ function buildUsageData(
 ): UsageData {
   const eventTotals = sumEventCosts(events);
 
-  const totalSpentCents = asNumber(myMember?.["includedSpendCents"]);
-  const hasSummary = totalSpentCents !== undefined;
+  const rawIncludedSpendCents = asNumber(myMember?.["includedSpendCents"]);
+  const rawSpendCents = asNumber(myMember?.["spendCents"]);
+  const topLevelMaxUserSpendCents = asNumber(teamSpendRaw["maxUserSpendCents"]);
+  const topLevelLimitedUserCount = asNumber(teamSpendRaw["limitedUserCount"]);
+
+  // Team summary semantics (aligned with observed account behavior):
+  // - spendCents tracks billed on-demand usage
+  // - once on-demand > 0, included budget is effectively exhausted (20/20 for team)
+  const hasSummary =
+    rawIncludedSpendCents !== undefined || rawSpendCents !== undefined;
   const source = hasSummary ? "get-team-spend" : "chargedCents-sum";
 
   const budgetCents = INCLUDED_BUDGET_CENTS[plan] ?? 0;
@@ -135,12 +161,18 @@ function buildUsageData(
       ? effectiveLimitDollars * 100
       : undefined;
 
-  const totalSpent = totalSpentCents ?? eventTotals.chargedCents;
-  const includedSpent = Math.min(totalSpent, budgetCents);
-  const onDemandSpent = Math.max(totalSpent - budgetCents, 0);
+  const totalSpent = rawIncludedSpendCents ?? eventTotals.chargedCents;
+  const onDemandSpent = rawSpendCents ?? Math.max(totalSpent - budgetCents, 0);
+  const includedSpent =
+    onDemandSpent > 0
+      ? budgetCents
+      : Math.min(rawIncludedSpendCents ?? totalSpent, budgetCents);
 
   log.appendLine(
-    `[api] budget=${budgetCents}¢, included=${includedSpent}¢, onDemand=${onDemandSpent}¢ (source=${source})`,
+    `[api] raw member values: includedSpendCents=${rawIncludedSpendCents ?? "n/a"}¢, spendCents=${rawSpendCents ?? "n/a"}¢, effectivePerUserLimitDollars=${effectiveLimitDollars ?? "n/a"}, maxUserSpendCents=${topLevelMaxUserSpendCents ?? "n/a"}¢, limitedUserCount=${topLevelLimitedUserCount ?? "n/a"}`,
+  );
+  log.appendLine(
+    `[api] computed values: budget=${budgetCents}¢, totalSpent=${totalSpent}¢, included=${includedSpent}¢, onDemand=${onDemandSpent}¢, onDemandLimit=${onDemandLimitCents ?? "n/a"}¢ (source=${source})`,
   );
 
   const resetAt = detectResetDate(myMember, teamSpendRaw, billingStart);
@@ -288,9 +320,6 @@ function pickDisplayMode(
   onDemandUsage: UsageBucket | undefined,
   requestsUsage: RequestsUsage | undefined,
 ): UsageData["displayMode"] {
-  if (onDemandUsage && onDemandUsage.usedCents > 0) {
-    return "on-demand";
-  }
   if (includedUsage) {
     if (
       includedUsage.totalCents === undefined ||
@@ -298,6 +327,9 @@ function pickDisplayMode(
     ) {
       return "included";
     }
+  }
+  if (onDemandUsage && onDemandUsage.usedCents > 0) {
+    return "on-demand";
   }
   if (requestsUsage && requestsUsage.used < requestsUsage.total) {
     return "requests";
@@ -452,6 +484,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" ? Math.round(value) : undefined;
+}
+
+function previewJson(raw: unknown, limit = 800): string {
+  try {
+    const text = JSON.stringify(raw);
+    return text.length <= limit
+      ? text
+      : `${text.slice(0, limit)}…[+${text.length - limit}]`;
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+function redactForLog(raw: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...raw };
+  for (const key of ["name", "email", "token", "sessionToken"]) {
+    if (key in copy) {
+      copy[key] = "[redacted]";
+    }
+  }
+  return copy;
+}
+
+function pickSummaryFields(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const keys = [
+    "subscriptionCycleStart",
+    "nextCycleStart",
+    "maxUserSpendCents",
+    "limitedUserCount",
+    "totalMembers",
+    "totalPages",
+    "hasAnySpendLimitOverrides",
+    "hasAnyFreeUsage",
+  ];
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (key in raw) {
+      out[key] = raw[key];
+    }
+  }
+  return out;
 }
 
 // ── Errors ──────────────────────────────────────────────────────────
