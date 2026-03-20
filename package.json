@@ -2,7 +2,7 @@
   "name": "cursor-meter",
   "displayName": "Cursor Meter",
   "description": "Display Cursor account usage in the status bar",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "zchan0",
   "engines": {
     "vscode": "^1.85.0"
