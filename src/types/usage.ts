@@ -20,4 +20,11 @@ export interface UsageData {
   resetAt?: string;
   fetchedAt: number;
   displayMode: "included" | "on-demand" | "requests" | "reset";
+  /**
+   * Rough pace hint: combined cycle cap = included budget (¢) + hardLimitOverrideDollars (→¢).
+   * Only set when team/API provides hardLimitOverrideDollars.
+   */
+  paceTotalCapCents?: number;
+  /** Combined used (included + on-demand) in cents, aligned with status display. */
+  paceUsedCents?: number;
 }

@@ -156,6 +156,7 @@ function buildUsageData(
   const budgetCents = INCLUDED_BUDGET_CENTS[plan] ?? 0;
 
   const effectiveLimitDollars = asNumber(myMember?.["effectivePerUserLimitDollars"]);
+  const hardLimitOverrideDollars = asNumber(myMember?.["hardLimitOverrideDollars"]);
   const onDemandLimitCents =
     effectiveLimitDollars !== undefined && effectiveLimitDollars > 0
       ? effectiveLimitDollars * 100
@@ -168,8 +169,19 @@ function buildUsageData(
       ? budgetCents
       : Math.min(rawIncludedSpendCents ?? totalSpent, budgetCents);
 
+  let paceTotalCapCents: number | undefined;
+  let paceUsedCents: number | undefined;
+  if (
+    budgetCents > 0 &&
+    hardLimitOverrideDollars !== undefined &&
+    hardLimitOverrideDollars > 0
+  ) {
+    paceTotalCapCents = budgetCents + Math.round(hardLimitOverrideDollars * 100);
+    paceUsedCents = includedSpent + onDemandSpent;
+  }
+
   log.appendLine(
-    `[api] raw member values: includedSpendCents=${rawIncludedSpendCents ?? "n/a"}¢, spendCents=${rawSpendCents ?? "n/a"}¢, effectivePerUserLimitDollars=${effectiveLimitDollars ?? "n/a"}, maxUserSpendCents=${topLevelMaxUserSpendCents ?? "n/a"}¢, limitedUserCount=${topLevelLimitedUserCount ?? "n/a"}`,
+    `[api] raw member values: includedSpendCents=${rawIncludedSpendCents ?? "n/a"}¢, spendCents=${rawSpendCents ?? "n/a"}¢, effectivePerUserLimitDollars=${effectiveLimitDollars ?? "n/a"}, hardLimitOverrideDollars=${hardLimitOverrideDollars ?? "n/a"}, maxUserSpendCents=${topLevelMaxUserSpendCents ?? "n/a"}¢, limitedUserCount=${topLevelLimitedUserCount ?? "n/a"}`,
   );
   log.appendLine(
     `[api] computed values: budget=${budgetCents}¢, totalSpent=${totalSpent}¢, included=${includedSpent}¢, onDemand=${onDemandSpent}¢, onDemandLimit=${onDemandLimitCents ?? "n/a"}¢ (source=${source})`,
@@ -206,6 +218,8 @@ function buildUsageData(
     resetAt: resetAt.toISOString(),
     fetchedAt: Date.now(),
     displayMode,
+    paceTotalCapCents,
+    paceUsedCents,
   };
 }
 

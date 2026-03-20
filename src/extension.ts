@@ -95,7 +95,7 @@ async function refresh(manual = false): Promise<void> {
 // ── Status Bar ───────────────────────────────────────────────────
 
 function showLoading(): void {
-  statusBarItem.text = "$(sync~spin) Cursor";
+  statusBarItem.text = "$(sync~spin) Usage";
   statusBarItem.tooltip = "Refreshing usage…";
 }
 
@@ -108,38 +108,41 @@ function updateStatusBar(): void {
     statusBarItem.tooltip = buildTooltip(data, error);
     statusBarItem.backgroundColor = undefined;
   } else if (error) {
-    statusBarItem.text = "$(warning) Cursor";
+    statusBarItem.text = "$(warning) Usage";
     statusBarItem.tooltip = `Error: ${error}\nClick to retry`;
     statusBarItem.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
     );
   } else {
-    statusBarItem.text = "$(pulse) Cursor";
+    statusBarItem.text = "$(pulse) Usage";
     statusBarItem.tooltip = "Click to load usage";
     statusBarItem.backgroundColor = undefined;
   }
 }
 
 function buildStatusBarText(data: UsageData): string {
+  const days = formatDaysUntilResetShort(data.resetAt);
+  const suffix = days ? ` · ${days}` : "";
+
   if (data.displayMode === "included" && data.includedUsage) {
     if (data.includedUsage.totalCents !== undefined) {
-      return `$(pulse) Cursor ${formatMoney(data.includedUsage.usedCents)}/${formatMoney(data.includedUsage.totalCents)}`;
+      return `$(pulse) Usage ${formatMoney(data.includedUsage.usedCents)}/${formatMoney(data.includedUsage.totalCents)}${suffix}`;
     }
-    return `$(pulse) Cursor ${formatMoney(data.includedUsage.usedCents)}`;
+    return `$(pulse) Usage ${formatMoney(data.includedUsage.usedCents)}${suffix}`;
   }
 
   if (data.displayMode === "on-demand" && data.onDemandUsage) {
     if (data.onDemandUsage.totalCents !== undefined) {
-      return `$(flame) Cursor ${formatMoney(data.onDemandUsage.usedCents)}/${formatMoney(data.onDemandUsage.totalCents)}`;
+      return `$(flame) Usage ${formatMoney(data.onDemandUsage.usedCents)}/${formatMoney(data.onDemandUsage.totalCents)}${suffix}`;
     }
-    return `$(flame) Cursor ${formatMoney(data.onDemandUsage.usedCents)}`;
+    return `$(flame) Usage ${formatMoney(data.onDemandUsage.usedCents)}${suffix}`;
   }
 
   if (data.displayMode === "requests" && data.requestsUsage) {
-    return `$(pulse) Cursor ${data.requestsUsage.used}/${data.requestsUsage.total}`;
+    return `$(pulse) Usage ${data.requestsUsage.used}/${data.requestsUsage.total}${suffix}`;
   }
 
-  return `$(calendar) Cursor ${formatResetShort(data.resetAt)}`;
+  return `$(calendar) Usage ${formatResetShort(data.resetAt)}`;
 }
 
 function buildTooltip(
@@ -165,7 +168,7 @@ function buildTooltip(
 
   if (data.requestsUsage) {
     lines.push(
-      `| Requests | ${data.requestsUsage.used} / ${data.requestsUsage.total} (${data.requestsUsage.source}) |`,
+      `| Requests | ${data.requestsUsage.used} / ${data.requestsUsage.total} |`,
     );
   }
 
@@ -173,6 +176,16 @@ function buildTooltip(
     `| Resets | ${formatResetLong(data.resetAt)} |`,
     `| Last updated | ${ago} |`,
   );
+
+  const daysLine = formatDaysUntilResetLine(data.resetAt);
+  if (daysLine) {
+    lines.push(`| Days until reset | ${daysLine} |`);
+  }
+
+  const pace = buildRoughDailyPaceLine(data);
+  if (pace) {
+    lines.push(`| Pace (rough) | ${pace} |`);
+  }
 
   if (error) {
     lines.push("", `$(warning) Last error: ${error}`);
@@ -267,9 +280,9 @@ function timeAgo(ts: number): string {
 
 function formatBucket(bucket: UsageBucket): string {
   if (bucket.totalCents !== undefined) {
-    return `${formatMoney(bucket.usedCents)} / ${formatMoney(bucket.totalCents)} (${bucket.source})`;
+    return `${formatMoney(bucket.usedCents)} / ${formatMoney(bucket.totalCents)}`;
   }
-  return `${formatMoney(bucket.usedCents)} (${bucket.source})`;
+  return formatMoney(bucket.usedCents);
 }
 
 function formatMoney(cents: number): string {
@@ -320,4 +333,102 @@ function formatResetLong(resetAt: string | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/** Full calendar days from now until reset (ceil); undefined if unknown. */
+function daysUntilReset(resetAt: string | undefined): number | undefined {
+  if (!resetAt) {
+    return undefined;
+  }
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const ms = date.getTime() - Date.now();
+  if (ms <= 0) {
+    return 0;
+  }
+  return Math.ceil(ms / 86_400_000);
+}
+
+function formatDaysUntilResetShort(resetAt: string | undefined): string {
+  const d = daysUntilReset(resetAt);
+  if (d === undefined) {
+    return "";
+  }
+  if (d === 0) {
+    return "0d";
+  }
+  return `${d}d`;
+}
+
+function formatDaysUntilResetLine(resetAt: string | undefined): string {
+  const d = daysUntilReset(resetAt);
+  if (d === undefined) {
+    return "";
+  }
+  if (d === 0) {
+    return "today / overdue window";
+  }
+  if (d === 1) {
+    return "1 day";
+  }
+  return `${d} days`;
+}
+
+/**
+ * Naive “budget ÷ days left” hint for pacing — not official Cursor billing.
+ */
+function buildRoughDailyPaceLine(data: UsageData): string {
+  const days = daysUntilReset(data.resetAt);
+  if (days === undefined || days <= 0) {
+    return "";
+  }
+
+  const denom = Math.max(1, days);
+
+  if (
+    data.paceTotalCapCents !== undefined &&
+    data.paceUsedCents !== undefined &&
+    data.paceTotalCapCents > 0
+  ) {
+    const remaining = data.paceTotalCapCents - data.paceUsedCents;
+    if (remaining <= 0) {
+      return "";
+    }
+    const perDay = remaining / denom;
+    return `~${formatMoney(Math.round(perDay))}/day (${formatMoney(remaining)} ÷ ${denom}d, cap ${formatMoney(data.paceTotalCapCents)} = budget + hard limit)`;
+  }
+
+  const tryBucket = (bucket: UsageBucket | undefined): string => {
+    if (!bucket?.totalCents) {
+      return "";
+    }
+    const remaining = bucket.totalCents - bucket.usedCents;
+    if (remaining <= 0) {
+      return "";
+    }
+    const perDay = remaining / denom;
+    return `~${formatMoney(Math.round(perDay))}/day on remaining cap (${formatMoney(remaining)} ÷ ${denom}d)`;
+  };
+
+  if (data.displayMode === "on-demand" && data.onDemandUsage) {
+    const line = tryBucket(data.onDemandUsage);
+    if (line) {
+      return line;
+    }
+  }
+  if (data.includedUsage?.totalCents !== undefined) {
+    const line = tryBucket(data.includedUsage);
+    if (line) {
+      return line;
+    }
+  }
+  if (data.onDemandUsage) {
+    const line = tryBucket(data.onDemandUsage);
+    if (line) {
+      return line;
+    }
+  }
+  return "";
 }
