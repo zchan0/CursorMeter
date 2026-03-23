@@ -4,6 +4,7 @@
   "description": "Display Cursor account usage in the status bar",
   "version": "0.1.2",
   "publisher": "zchan0",
+  "icon": "assets/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
