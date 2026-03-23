@@ -149,7 +149,6 @@ function buildTooltip(
   data: UsageData,
   error: string | undefined,
 ): vscode.MarkdownString {
-  const ago = timeAgo(data.fetchedAt);
   const lines = [`**Cursor Meter** (${formatPlan(data.plan)})`, ""];
 
   lines.push(`| | |`, `|---|---|`);
@@ -174,7 +173,6 @@ function buildTooltip(
 
   lines.push(
     `| Resets | ${formatResetLong(data.resetAt)} |`,
-    `| Last updated | ${ago} |`,
   );
 
   const daysLine = formatDaysUntilResetLine(data.resetAt);
@@ -263,19 +261,6 @@ function promptForToken(): void {
         );
       }
     });
-}
-
-function timeAgo(ts: number): string {
-  const seconds = Math.floor((Date.now() - ts) / 1000);
-  if (seconds < 60) {
-    return "just now";
-  }
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
 }
 
 function formatBucket(bucket: UsageBucket): string {
