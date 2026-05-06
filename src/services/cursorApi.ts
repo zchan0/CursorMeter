@@ -139,7 +139,9 @@ function buildUsageData(
   billingStart: Date,
   log: OutputChannel,
 ): UsageData {
-  const eventTotals = sumEventCosts(events);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const eventTotals = sumEventCosts(events, startOfToday.getTime());
 
   const rawIncludedSpendCents = asNumber(myMember?.["includedSpendCents"]);
   const rawSpendCents = asNumber(myMember?.["spendCents"]);
@@ -220,6 +222,7 @@ function buildUsageData(
     displayMode,
     paceTotalCapCents,
     paceUsedCents,
+    todayCostCents: eventTotals.todayCents > 0 ? eventTotals.todayCents : undefined,
   };
 }
 
@@ -314,19 +317,35 @@ function extractRequestsUsage(
   return undefined;
 }
 
-function sumEventCosts(events: unknown[]): {
+function sumEventCosts(events: unknown[], startOfTodayMs: number): {
   chargedCents: number;
+  todayCents: number;
 } {
   let chargedCents = 0;
+  let todayCents = 0;
   for (const event of events) {
     if (!isRecord(event)) {
       continue;
     }
     if (typeof event["chargedCents"] === "number") {
       chargedCents += event["chargedCents"];
+      if (getEventTimestamp(event) >= startOfTodayMs) {
+        todayCents += event["chargedCents"];
+      }
     }
   }
-  return { chargedCents: Math.round(chargedCents) };
+  return { chargedCents: Math.round(chargedCents), todayCents: Math.round(todayCents) };
+}
+
+function getEventTimestamp(event: Record<string, unknown>): number {
+  for (const key of ["timestamp", "date", "createdAt", "created_at"]) {
+    const val = event[key];
+    if (typeof val === "string" || typeof val === "number") {
+      const ms = new Date(val).getTime();
+      if (!Number.isNaN(ms)) return ms;
+    }
+  }
+  return 0; // fallback if no recognizable timestamp
 }
 
 function pickDisplayMode(

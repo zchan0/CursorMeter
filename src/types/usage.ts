@@ -27,4 +27,8 @@ export interface UsageData {
   paceTotalCapCents?: number;
   /** Combined used (included + on-demand) in cents, aligned with status display. */
   paceUsedCents?: number;
+  /** Total cents consumed today, tracked locally or parsed from events. */
+  todayCostCents?: number;
+  /** Total requests consumed today, tracked locally. */
+  todayRequests?: number;
 }

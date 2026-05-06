@@ -5,16 +5,20 @@ import { UsageCache } from "./services/storage";
 import type { UsageBucket, UsageData } from "./types/usage";
 
 const MIN_REFRESH_INTERVAL_MS = 30_000;
+const TOKEN_PROMPT_COOLDOWN_MS = 60_000;
 
 let statusBarItem: vscode.StatusBarItem;
 let pollingTimer: ReturnType<typeof setInterval> | undefined;
 let refreshing = false;
 let lastRefreshTime = 0;
+let tokenPromptShowing = false;
+let lastTokenPromptTime = 0;
 
 const cache = new UsageCache();
 let log: vscode.OutputChannel;
 
 export function activate(context: vscode.ExtensionContext): void {
+  cache.setContext(context);
   log = vscode.window.createOutputChannel("Cursor Meter");
   log.appendLine("Cursor Meter activated");
 
@@ -31,6 +35,12 @@ export function activate(context: vscode.ExtensionContext): void {
     () => refresh(true),
   );
   context.subscriptions.push(refreshCmd);
+
+  const openTokenSettingCmd = vscode.commands.registerCommand(
+    "cursorMeter.openTokenSetting",
+    openTokenSetting,
+  );
+  context.subscriptions.push(openTokenSettingCmd);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -56,6 +66,12 @@ export function deactivate(): void {
 
 // ── Refresh ──────────────────────────────────────────────────────
 
+/**
+ * Token-expiry UX spec:
+ * - Missing token and HTTP 401/403 both guide the user to `cursorMeter.sessionToken`.
+ * - Polling may record the error, but prompts are rate-limited to avoid spam.
+ * - When auth is broken, clicking the status item opens token settings instead of retrying.
+ */
 async function refresh(manual = false): Promise<void> {
   if (refreshing) {
     return;
@@ -86,6 +102,9 @@ async function refresh(manual = false): Promise<void> {
     const msg = formatError(err);
     log.appendLine(`[refresh] Error: ${msg}`);
     cache.setError(msg);
+    if (isTokenAuthError(err)) {
+      promptForToken("expired");
+    }
   } finally {
     refreshing = false;
     updateStatusBar();
@@ -106,16 +125,25 @@ function updateStatusBar(): void {
   if (data) {
     statusBarItem.text = buildStatusBarText(data);
     statusBarItem.tooltip = buildTooltip(data, error);
+    statusBarItem.command = isTokenErrorMessage(error)
+      ? "cursorMeter.openTokenSetting"
+      : "cursorMeter.refresh";
     statusBarItem.backgroundColor = undefined;
   } else if (error) {
     statusBarItem.text = "$(warning) Usage";
-    statusBarItem.tooltip = `Error: ${error}\nClick to retry`;
+    statusBarItem.tooltip = isTokenErrorMessage(error)
+      ? `Error: ${error}\nClick to update WorkosCursorSessionToken`
+      : `Error: ${error}\nClick to retry`;
+    statusBarItem.command = isTokenErrorMessage(error)
+      ? "cursorMeter.openTokenSetting"
+      : "cursorMeter.refresh";
     statusBarItem.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
     );
   } else {
     statusBarItem.text = "$(pulse) Usage";
     statusBarItem.tooltip = "Click to load usage";
+    statusBarItem.command = "cursorMeter.refresh";
     statusBarItem.backgroundColor = undefined;
   }
 }
@@ -169,6 +197,17 @@ function buildTooltip(
     lines.push(
       `| Requests | ${data.requestsUsage.used} / ${data.requestsUsage.total} |`,
     );
+  }
+
+  const todayPieces: string[] = [];
+  if (data.todayRequests && data.todayRequests > 0) {
+    todayPieces.push(`${data.todayRequests} requests`);
+  }
+  if (data.todayCostCents && data.todayCostCents > 0) {
+    todayPieces.push(formatMoney(data.todayCostCents));
+  }
+  if (todayPieces.length > 0) {
+    lines.push(`| Today's Usage | ${todayPieces.join(" / ")} |`);
   }
 
   lines.push(
@@ -247,20 +286,53 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
-function promptForToken(): void {
+function isTokenAuthError(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 401 || err.status === 403);
+}
+
+function isTokenErrorMessage(message: string | undefined): boolean {
+  return message?.startsWith("Token expired or invalid") === true ||
+    message === "No token configured";
+}
+
+function promptForToken(reason: "missing" | "expired" = "missing"): void {
+  const now = Date.now();
+  if (
+    tokenPromptShowing ||
+    now - lastTokenPromptTime < TOKEN_PROMPT_COOLDOWN_MS
+  ) {
+    return;
+  }
+
+  tokenPromptShowing = true;
+  lastTokenPromptTime = now;
+  const message = reason === "expired"
+    ? "Cursor Meter: WorkosCursorSessionToken expired or invalid. Update it to refresh usage."
+    : "Cursor Meter: No session token found. Configure it in settings or enable auto-read.";
+
   vscode.window
     .showWarningMessage(
-      "Cursor Meter: No session token found. Configure it in settings or enable auto-read.",
-      "Open Settings",
+      message,
+      "Open Token Setting",
+      "Open Cursor Settings",
     )
     .then((choice) => {
-      if (choice === "Open Settings") {
-        vscode.commands.executeCommand(
-          "workbench.action.openSettings",
-          "cursorMeter",
-        );
+      tokenPromptShowing = false;
+      if (choice === "Open Token Setting") {
+        openTokenSetting();
+      } else if (choice === "Open Cursor Settings") {
+        vscode.env.openExternal(vscode.Uri.parse("https://cursor.com/settings"));
       }
+    }, () => {
+      tokenPromptShowing = false;
     });
+}
+
+function openTokenSetting(): void {
+  vscode.commands.executeCommand(
+    "workbench.action.openSettings",
+    "cursorMeter.sessionToken",
+  );
 }
 
 function formatBucket(bucket: UsageBucket): string {
