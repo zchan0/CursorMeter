@@ -2,7 +2,7 @@
   "name": "cursor-meter",
   "displayName": "Cursor Meter",
   "description": "Display Cursor account usage in the status bar",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "zchan0",
   "icon": "assets/icon.png",
   "engines": {

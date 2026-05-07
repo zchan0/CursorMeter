@@ -2,14 +2,28 @@
 
 ![Cursor Meter Icon](assets/icon.png)
 
-**Cursor Meter** is an extension that displays your Cursor account's AI token usage directly in the status bar of your editor. It helps you keep track of your fast requests and overall consumption seamlessly.
+**Cursor Meter** displays your Cursor account usage directly in the status bar:
+Included usage, On-Demand usage, reset date, and a rough daily pace estimate.
 
 ## Features
 
-- 📊 **Status Bar Integration**: Real-time display of your Cursor AI token usage in the status bar.
+- 📊 **Status Bar Integration**: Real-time display of your Cursor usage in the status bar.
 - 🔄 **Auto Token Reading**: By default, it automatically extracts your secure session token from your local Cursor database, requiring zero setup.
 - ⏱️ **Customizable Interval**: Configure how often the usage statistics are refreshed.
 - ⚡ **Manual Refresh**: Quickly force a usage update via the Command Palette.
+
+## API Compatibility Note
+
+Cursor Meter relies on Cursor's private web APIs. These endpoints and response
+fields can change without notice. When Cursor changes billing fields, the
+extension may temporarily show inaccurate Included / On-Demand values until the
+parsing logic is updated.
+
+As of recent Cursor API changes, Team usage may no longer expose member-level
+`spendCents` / `includedSpendCents` in `get-team-spend`. Cursor Meter treats
+event kinds such as `USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS` and
+`USAGE_EVENT_KIND_USAGE_BASED` differently to avoid counting Included usage as
+On-Demand usage.
 
 ## Configuration & Usage
 

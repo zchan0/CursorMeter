@@ -1,8 +1,12 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import { execFile } from "child_process";
+import { promisify } from "util";
 
 const TOKEN_DB_KEY = "WorkosCursorSessionToken";
+const MAX_RAW_DB_SCAN_BYTES = 128 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 export async function resolveToken(
   log: vscode.OutputChannel,
@@ -54,7 +58,7 @@ async function readTokenFromDb(
   }
 
   try {
-    const token = await queryTokenFromSqlite(dbPath);
+    const token = await queryTokenFromSqlite(dbPath, log);
     if (token) {
       log.appendLine("[auth] Token read from local Cursor database");
       return token;
@@ -90,13 +94,21 @@ function getCursorDbPath(): string | undefined {
   return undefined;
 }
 
-/**
- * Read the token from state.vscdb using a raw file scan fallback.
- * We avoid a native SQLite dependency by reading the file as a buffer
- * and searching for the token pattern — the DB is small and the token
- * value is stored as a plain string in the SQLite page data.
- */
-async function queryTokenFromSqlite(dbPath: string): Promise<string | undefined> {
+async function queryTokenFromSqlite(
+  dbPath: string,
+  log: vscode.OutputChannel,
+): Promise<string | undefined> {
+  const sqliteToken = await queryTokenWithSqliteCli(dbPath, log);
+  if (sqliteToken) {
+    return sqliteToken;
+  }
+
+  const stat = await fs.promises.stat(dbPath);
+  if (stat.size > MAX_RAW_DB_SCAN_BYTES) {
+    log.appendLine("[auth] Cursor DB too large for raw scan fallback");
+    return undefined;
+  }
+
   const buf = await fs.promises.readFile(dbPath);
   const content = buf.toString("utf-8");
 
@@ -112,4 +124,27 @@ async function queryTokenFromSqlite(dbPath: string): Promise<string | undefined>
     /user_[A-Za-z0-9_\-:.]{20,}/,
   );
   return tokenMatch ? tokenMatch[0] : undefined;
+}
+
+async function queryTokenWithSqliteCli(
+  dbPath: string,
+  log: vscode.OutputChannel,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      "sqlite3",
+      [
+        dbPath,
+        `SELECT value FROM itemTable WHERE key='${TOKEN_DB_KEY}' LIMIT 1;`,
+      ],
+      { timeout: 5_000, maxBuffer: 20_000 },
+    );
+    const token = stdout.trim();
+    return token.length > 0 ? token : undefined;
+  } catch (err) {
+    log.appendLine(
+      `[auth] sqlite3 token query unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
 }

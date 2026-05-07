@@ -151,9 +151,9 @@ function buildUsageData(
   // Team summary semantics (aligned with observed account behavior):
   // - spendCents tracks billed on-demand usage
   // - once on-demand > 0, included budget is effectively exhausted (20/20 for team)
-  const hasSummary =
+  const hasMemberSpendSummary =
     rawIncludedSpendCents !== undefined || rawSpendCents !== undefined;
-  const source = hasSummary ? "get-team-spend" : "chargedCents-sum";
+  const source = hasMemberSpendSummary ? "get-team-spend" : "usage-events";
 
   const budgetCents = INCLUDED_BUDGET_CENTS[plan] ?? 0;
 
@@ -164,12 +164,13 @@ function buildUsageData(
       ? effectiveLimitDollars * 100
       : undefined;
 
-  const totalSpent = rawIncludedSpendCents ?? eventTotals.chargedCents;
-  const onDemandSpent = rawSpendCents ?? Math.max(totalSpent - budgetCents, 0);
-  const includedSpent =
-    onDemandSpent > 0
+  const totalSpent = rawIncludedSpendCents ?? eventTotals.totalCents;
+  const onDemandSpent = rawSpendCents ?? eventTotals.onDemandCents;
+  const includedSpent = hasMemberSpendSummary
+    ? onDemandSpent > 0
       ? budgetCents
-      : Math.min(rawIncludedSpendCents ?? totalSpent, budgetCents);
+      : Math.min(rawIncludedSpendCents ?? totalSpent, budgetCents)
+    : Math.min(eventTotals.includedCents, budgetCents);
 
   let paceTotalCapCents: number | undefined;
   let paceUsedCents: number | undefined;
@@ -184,6 +185,9 @@ function buildUsageData(
 
   log.appendLine(
     `[api] raw member values: includedSpendCents=${rawIncludedSpendCents ?? "n/a"}¢, spendCents=${rawSpendCents ?? "n/a"}¢, effectivePerUserLimitDollars=${effectiveLimitDollars ?? "n/a"}, hardLimitOverrideDollars=${hardLimitOverrideDollars ?? "n/a"}, maxUserSpendCents=${topLevelMaxUserSpendCents ?? "n/a"}¢, limitedUserCount=${topLevelLimitedUserCount ?? "n/a"}`,
+  );
+  log.appendLine(
+    `[api] event values: included=${eventTotals.includedCents}¢, onDemand=${eventTotals.onDemandCents}¢, total=${eventTotals.totalCents}¢, today=${eventTotals.todayCents}¢`,
   );
   log.appendLine(
     `[api] computed values: budget=${budgetCents}¢, totalSpent=${totalSpent}¢, included=${includedSpent}¢, onDemand=${onDemandSpent}¢, onDemandLimit=${onDemandLimitCents ?? "n/a"}¢ (source=${source})`,
@@ -201,7 +205,7 @@ function buildUsageData(
       source,
     };
   }
-  if (onDemandSpent > 0) {
+  if (onDemandSpent > 0 || (budgetCents > 0 && includedSpent >= budgetCents)) {
     onDemandUsage = {
       usedCents: onDemandSpent,
       totalCents: onDemandLimitCents,
@@ -318,30 +322,62 @@ function extractRequestsUsage(
 }
 
 function sumEventCosts(events: unknown[], startOfTodayMs: number): {
-  chargedCents: number;
+  totalCents: number;
+  includedCents: number;
+  onDemandCents: number;
   todayCents: number;
 } {
-  let chargedCents = 0;
+  let totalCents = 0;
+  let includedCents = 0;
+  let onDemandCents = 0;
   let todayCents = 0;
   for (const event of events) {
     if (!isRecord(event)) {
       continue;
     }
     if (typeof event["chargedCents"] === "number") {
-      chargedCents += event["chargedCents"];
+      const cents = event["chargedCents"];
+      totalCents += cents;
+      if (isUsageBasedEvent(event)) {
+        onDemandCents += cents;
+      } else if (isIncludedUsageEvent(event)) {
+        includedCents += cents;
+      }
       if (getEventTimestamp(event) >= startOfTodayMs) {
-        todayCents += event["chargedCents"];
+        todayCents += cents;
       }
     }
   }
-  return { chargedCents: Math.round(chargedCents), todayCents: Math.round(todayCents) };
+  return {
+    totalCents: Math.round(totalCents),
+    includedCents: Math.round(includedCents),
+    onDemandCents: Math.round(onDemandCents),
+    todayCents: Math.round(todayCents),
+  };
+}
+
+function isUsageBasedEvent(event: Record<string, unknown>): boolean {
+  if (event["kind"] === "USAGE_EVENT_KIND_USAGE_BASED") {
+    return true;
+  }
+  const usageBasedCosts = event["usageBasedCosts"];
+  return typeof usageBasedCosts === "string" && usageBasedCosts.trim().startsWith("$");
+}
+
+function isIncludedUsageEvent(event: Record<string, unknown>): boolean {
+  return event["kind"] === "USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS";
 }
 
 function getEventTimestamp(event: Record<string, unknown>): number {
   for (const key of ["timestamp", "date", "createdAt", "created_at"]) {
     const val = event[key];
-    if (typeof val === "string" || typeof val === "number") {
-      const ms = new Date(val).getTime();
+    if (typeof val === "number") {
+      return val;
+    }
+    if (typeof val === "string") {
+      const trimmed = val.trim();
+      const numeric = Number(trimmed);
+      const ms = Number.isFinite(numeric) ? numeric : new Date(trimmed).getTime();
       if (!Number.isNaN(ms)) return ms;
     }
   }
@@ -361,7 +397,7 @@ function pickDisplayMode(
       return "included";
     }
   }
-  if (onDemandUsage && onDemandUsage.usedCents > 0) {
+  if (onDemandUsage) {
     return "on-demand";
   }
   if (requestsUsage && requestsUsage.used < requestsUsage.total) {
